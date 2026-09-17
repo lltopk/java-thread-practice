@@ -1,9 +1,12 @@
+
 ThreadPoolTask线程池两种提交任务方式分别是，execute  submit
 
 区别就不多说了，execute接收Runnable任务但不提供返回值，submit接收Callable任务提供返回值
 
 本文目的是观察二者对于未捕获异常的处置方式，所谓未捕获异常指的是没被try-catch捕获的运行时异常
+
 ```java
+
 @Slf4j
 public class ThreadPoolTaskExceptionSample {
     static ExecutorService pool = Executors.newFixedThreadPool(1);
@@ -13,7 +16,7 @@ public class ThreadPoolTaskExceptionSample {
      * @param args
      */
     public static void main(String[] args) {
-        testExecute(pool);
+testExecute(pool);
     }
 
     /**
@@ -24,7 +27,7 @@ public class ThreadPoolTaskExceptionSample {
      * @return: void
      **/
     private static void testExecute(ExecutorService pool) {
-        pool.execute(() -> {
+pool.execute(() -> {
             log.debug("task");
             int i = 1 / 0;
 
@@ -39,7 +42,7 @@ public class ThreadPoolTaskExceptionSample {
      * @return: void
      **/
     private static void testSubmit(ExecutorService pool) {
-        pool.submit(() -> {
+pool.submit(() -> {
             log.debug("task");
             int i = 1 / 0;
 
@@ -48,8 +51,10 @@ public class ThreadPoolTaskExceptionSample {
 }
 ```
 
-## submit如何获取异常信息: 显示的try-catch
+## 方式一显示的try-catch
+
 显示的try-catch
+
 ```java
 @Slf4j
 public class ThreadPoolTaskExceptionSample2 {
@@ -59,24 +64,29 @@ public class ThreadPoolTaskExceptionSample2 {
      */
     public static void main(String[] args) {
         ExecutorService pool = Executors.newFixedThreadPool(1);
-        pool.submit(() -> {
+pool.submit(() -> {
             try {
                 log.debug("task");
                 int i = 1 / 0;
             } catch (Exception e) {
-                e.printStackTrace();
+e.printStackTrace();
             }
         });
     }
 }
 ```
-## submit如何获取异常信息: 手动get()
+
+## 方式二手动get()
+
 通过get方法，因为get方法不仅会存储计算结果，也会存储计算异常
+
 ```java
     /** The result to return or exception to throw from get() */
     private Object outcome; // non-volatile, protected by state reads/writes
 ```
+
 示例如下
+
 ```java
 @Slf4j
 public class ThreadPoolTaskExceptionSample3 {
@@ -93,13 +103,16 @@ public class ThreadPoolTaskExceptionSample3 {
             return true;
 
         });
-        
+
         log.debug("task:{}", f.get());
     }
 }
 ```
+
 ## 为什么FutureTask吃掉了异常
+
 AbstractExecutorService#submit
+
 ```java
     /**
      * @throws RejectedExecutionException {@inheritDoc}
@@ -112,7 +125,9 @@ AbstractExecutorService#submit
         return ftask;
     }
 ```
+
 可以看到，submit同样是调用了execute，只不过将execute参数包装成了RunnableFuture，RunnableFuture继承了Runnable，因此execute接收RunnableFuture合情合理
+
 ```java
     public void execute(Runnable command) {
         if (command == null)
@@ -154,7 +169,9 @@ AbstractExecutorService#submit
             reject(command);
     }
 ```
+
 execute做的事情就是将任务加入队列addWorker
+
 ```java
     private boolean addWorker(Runnable firstTask, boolean core) {
         retry:
@@ -223,7 +240,9 @@ execute做的事情就是将任务加入队列addWorker
         return workerStarted;
     }
 ```
+
 大概就是为任务创建工作线程Worker，因此我们看工作线程Worker的消费逻辑, 来看内部类Worker
+
 ```java
     private final class Worker
         extends AbstractQueuedSynchronizer
@@ -258,7 +277,9 @@ execute做的事情就是将任务加入队列addWorker
     ......
 }
 ```
+
 Delegates main run loop to outer runWorker
+
 ```java
     final void runWorker(Worker w) {
         Thread wt = Thread.currentThread();
@@ -304,11 +325,13 @@ Delegates main run loop to outer runWorker
         }
     }
 ```
+
 可以看到，如果task.run();有抛出异常，比如execute提交的runnable存在异常，那么runWorker一定可以捕获到抛给用户，
 
 既然runWorker没有捕获到futuretask的异常，那么一定是futuretask的run方法吃掉了异常
 
 下面来看FutureTask#run, 确实
+
 ```java
     public void run() {
         if (state != NEW ||
@@ -343,7 +366,9 @@ Delegates main run loop to outer runWorker
         }
     }
 ```
+
 当futuretask发生异常，会自己吃掉异常 ，并通过setException(ex);设置给内部的outcome，用户只能通过get的方式获得异常
+
 ```java
     protected void setException(Throwable t) {
         if (UNSAFE.compareAndSwapInt(this, stateOffset, NEW, COMPLETING)) {
@@ -353,12 +378,19 @@ Delegates main run loop to outer runWorker
         }
     }
 ```
-## 如何把FutureTask异常捕获和获得的权力交给用户
-真相大白了，接下来要做的是，除了让用户手动的try-catch之外，如何把FutureTask异常捕获和获得的权力交给用户？
 
-当有未捕获异常发生的时候自动抛给用户
+## 如何把FutureTask异常捕获和获得的权力交给用户
+
+真相大白了, 上面的两种获得方式
+
+- 用户手动的try-catch, 相当于提前拿到了异常, 避免FutureTask.run的时候被jdk捕获
+- 用户手动get, 相当于是FutureTask.run的时候被jdk捕获之后, 存在了outcome中, 这时用户再从outcome中获取
+
+
+接下来要做的是，如何把FutureTask异常捕获和获得的权力交给用户？ 当有未捕获异常发生的时候自动抛给用户
 
 ThreadPoolExecutor#runWorker中有个未实现的抽象方法afterExecute(task, thrown);
+
 ```java
     final void runWorker(Worker w) {
         Thread wt = Thread.currentThread();
@@ -404,7 +436,9 @@ ThreadPoolExecutor#runWorker中有个未实现的抽象方法afterExecute(task, 
         }
     }
 ```
+
 由于afterExecute(task, thrown);位于finally，因此一定会被执行，所以解决方案就是重写afterExecute(task, thrown);
+
 ```java
     static class ExecutorServiceWithUncatchException extends ThreadPoolExecutor {
         /**
@@ -456,10 +490,5 @@ ThreadPoolExecutor#runWorker中有个未实现的抽象方法afterExecute(task, 
         }
     }
 ```
+
 后续就是用我们重写的线程池ExecutorServiceWithUncatchException，代替原生的ThreadPoolExecutor
-
-
-
-
-
-
